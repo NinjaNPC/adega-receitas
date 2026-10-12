@@ -378,7 +378,9 @@ details.quick summary { cursor: pointer; color: var(--primary); font-weight: 600
 .menu-link span { font-size: 1.6rem; }
 .menu-link div { flex: 1; display: flex; flex-direction: column; font-size: 1rem; }
 .menu-link small { color: var(--muted); font-size: .8rem; }
-h4.sub { margin: 1rem 0 .5rem; font-size: .92rem; }
+output.calc { padding: .55rem .7rem; border-radius: 10px; background: var(--surface-2); font-weight: 700; font-size: 1.05rem; }
+output.calc.muted { font-weight: 400; font-size: .88rem; }
+h4.sub {margin: 1rem 0 .5rem; font-size: .92rem; }
 
 /* ---------- Toast ---------- */
 #toast {

@@ -985,7 +985,9 @@ function restaurantStats(r, visits) {
   return { visits: mine, count: mine.length, avg: avg(mine.map(v => v.rating)), last: mine[0]?.date, lastPhoto: mine.find(v => v.photos?.length)?.photos[0] };
 }
 
-const restaurantPlace = r => [r.neighborhood, r.city].filter(Boolean).join(', ');
+const perPerson = (spent, people) => (isNum(spent) && spent > 0 && isNum(people) && people > 0 ? spent / people : null);
+
+const restaurantPlace = r =>[r.neighborhood, r.city].filter(Boolean).join(', ');
 
 async function restaurantList() {
   setHeader('Restaurantes');
@@ -1188,7 +1190,12 @@ async function restaurantDetail(id) {
 function visitCard(v, drinkById) {
   const drinks = (v.drinks || []).map(id => drinkById.get(id)).filter(Boolean);
   const scores = VISIT_CRITERIA.filter(c => v.scores?.[c.k] > 0).map(c => `${c.label} ${v.scores[c.k]}`);
-  const bill = [isNum(v.spent) ? fmtMoney(v.spent) : '', isNum(v.people) ? `${v.people} pessoa${v.people > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ');
+  const pp = perPerson(v.spent, v.people);
+  const bill = [
+    isNum(v.spent) ? fmtMoney(v.spent) : '',
+    isNum(v.people) ? `${v.people} pessoa${v.people > 1 ? 's' : ''}` : '',
+    pp != null && v.people > 1 ? `${fmtMoney(pp)} por pessoa` : '',
+  ].filter(Boolean).join(' · ');
   return `<article class="log">
     <div class="log-head"><b>${fmtDate(v.date)}</b>${v.mealType ? `<span class="muted">${esc(v.mealType)}</span>` : ''}${v.rating ? stars(v.rating) : ''}
       <a class="link" href="#/visits/${esc(v.id)}/edit">editar</a></div>
@@ -1243,6 +1250,7 @@ async function visitForm(visitId, restaurantId) {
         ${field('Valor total (R$)', numInput('spent', v.spent))}
         ${field('Nº de pessoas', numInput('people', v.people))}
       </div>
+      <div class="field full"><span>Valor por pessoa</span><output id="per-person" class="calc"></output></div>
       <div class="field full"><span>Voltaria?</span>${segInput('returnAgain', ['Sim', 'Talvez', 'Não'], v.returnAgain)}</div>
     </section>
     <section class="card"><h3>Comentários</h3><textarea name="notes" rows="3" placeholder="Atendimento, espera, o que pedir na próxima…">${esc(v.notes)}</textarea></section>
@@ -1255,6 +1263,15 @@ async function visitForm(visitId, restaurantId) {
   const form = $('#f');
   bindForm(form);
   const picker = bindDrinkPicker(drinks, v.drinks, { place: r.name, notes: `Provada no restaurante "${r.name}".` });
+  const readNum = name => Number(form.elements.namedItem(name).value.trim().replace(',', '.'));
+  const updatePerPerson = () => {
+    const pp = perPerson(readNum('spent'), readNum('people'));
+    $('#per-person').textContent = pp != null ? fmtMoney(pp) : 'Preencha o valor total e o nº de pessoas';
+    $('#per-person').classList.toggle('muted', pp == null);
+  };
+  updatePerPerson();
+  form.elements.namedItem('spent').addEventListener('input', updatePerPerson);
+  form.elements.namedItem('people').addEventListener('input', updatePerPerson);
   $('#del')?.addEventListener('click', async () => {
     if (!confirm('Excluir este registro de visita?')) return;
     await db.del('visits', v.id);
@@ -1603,7 +1620,7 @@ async function moreView() {
       ${persisted ? '' : '<div class="actions left"><button class="btn" id="persist">Pedir armazenamento persistente</button></div>'}
       <div class="actions left"><button class="btn ghost" id="clean">Limpar fotos não usadas</button></div>
     </section>
-    <p class="hint center">Adega & Receitas · v1.1 · funciona offline</p>`);
+    <p class="hint center">Adega & Receitas · v1.2 · funciona offline</p>`);
 
   $('#export').onclick = async () => {
     try {
