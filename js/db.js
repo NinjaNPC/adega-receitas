@@ -1,8 +1,10 @@
 // Camada de armazenamento local (IndexedDB). Tudo fica no aparelho.
 
 const DB_NAME = 'adega-receitas';
-const DB_VERSION = 1;
-export const STORES = ['drinks', 'recipes', 'logs', 'photos', 'meta'];
+const DB_VERSION = 2;
+export const STORES = ['drinks', 'recipes', 'logs', 'restaurants', 'visits', 'photos', 'meta'];
+// Tabelas cujos registros podem ter fotos (campo `photos`)
+export const PHOTO_OWNERS = ['drinks', 'recipes', 'logs', 'restaurants', 'visits'];
 
 let dbPromise;
 
@@ -16,7 +18,11 @@ function open() {
           if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: 'id' });
         }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        // Libera o banco se uma versão nova do app (aberta em outra aba) precisar atualizá-lo
+        req.result.onversionchange = () => { req.result.close(); location.reload(); };
+        resolve(req.result);
+      };
       req.onerror = () => reject(req.error);
     });
   }

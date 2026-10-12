@@ -49,9 +49,9 @@ export function forgetPhoto(id) { cache.delete(id); }
 
 // Remove fotos que não pertencem a nenhum registro (ex.: formulário cancelado).
 export async function cleanOrphanPhotos() {
-  const [drinks, recipes, logs, photos] = await Promise.all(['drinks', 'recipes', 'logs', 'photos'].map(db.getAll));
+  const [photos, ...owners] = await Promise.all(['photos', ...db.PHOTO_OWNERS].map(db.getAll));
   const used = new Set();
-  for (const r of [...drinks, ...recipes, ...logs]) for (const id of r.photos || []) used.add(id);
+  for (const r of owners.flat()) for (const id of r.photos || []) used.add(id);
   const hourAgo = Date.now() - 3600_000;
   const orphans = photos.filter(p => !used.has(p.id) && (p.createdAt || 0) < hourAgo).map(p => p.id);
   if (orphans.length) await db.delMany('photos', orphans);

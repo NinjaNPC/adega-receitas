@@ -190,4 +190,22 @@ export const DIFFICULTIES = ['Fácil', 'Média', 'Difícil'];
 
 export const UTENSILS = ['Panela', 'Panela de pressão', 'Frigideira', 'Wok', 'Caçarola de ferro', 'Assadeira', 'Forma de bolo', 'Forma de pudim', 'Refratário', 'Forno', 'Air fryer', 'Micro-ondas', 'Liquidificador', 'Batedeira', 'Processador', 'Mixer', 'Balança', 'Termômetro', 'Fouet', 'Espátula', 'Peneira', 'Rolo de massa', 'Tábua', 'Faca do chef', 'Ralador', 'Mandoline', 'Coqueteleira', 'Dosador', 'Socador', 'Coador', 'Grelha / churrasqueira', 'Sous vide'];
 
-export const SIDE_SUGGESTIONS = ['Arroz', 'Salada', 'Farofa', 'Purê', 'Batata', 'Pão', 'Legumes', 'Feijão', 'Molho', 'Massa', 'Polenta'];
+// ---------- Restaurantes ----------
+
+export const CUISINES = ['Brasileira', 'Mineira', 'Nordestina', 'Gaúcha / churrascaria', 'Italiana', 'Pizzaria', 'Japonesa', 'Chinesa', 'Coreana', 'Tailandesa', 'Indiana', 'Árabe / libanesa', 'Mexicana', 'Peruana', 'Argentina', 'Portuguesa', 'Espanhola', 'Francesa', 'Hamburgueria', 'Frutos do mar', 'Vegetariana / vegana', 'Contemporânea', 'Bistrô', 'Boteco / bar', 'Cervejaria', 'Bar de vinhos', 'Café / padaria', 'Doceria / sorveteria', 'Steakhouse', 'Self-service / por quilo'];
+
+export const PRICE_LEVELS = ['$', '$$', '$$$', '$$$$'];
+
+export const RESTAURANT_TAGS = ['Romântico', 'Família', 'Crianças', 'Pet friendly', 'Ao ar livre', 'Música ao vivo', 'Vista bonita', 'Rodízio', 'Delivery', 'Reserva recomendada', 'Fila', 'Estacionamento', 'Carta de vinhos', 'Chope artesanal', 'Drinks autorais', 'Opções veganas', 'Sem glúten', 'Almoço executivo'];
+
+export const VISIT_TYPES = ['Almoço', 'Jantar', 'Café da manhã', 'Brunch', 'Lanche', 'Happy hour', 'Delivery'];
+
+export const VISIT_CRITERIA = [
+  { k: 'comida', label: 'Comida', low: 'Ruim', high: 'Excelente' },
+  { k: 'bebidas', label: 'Bebidas', low: 'Ruins', high: 'Excelentes' },
+  { k: 'atendimento', label: 'Atendimento', low: 'Ruim', high: 'Excelente' },
+  { k: 'ambiente', label: 'Ambiente', low: 'Ruim', high: 'Excelente' },
+  { k: 'custoBeneficio', label: 'Custo-benefício', low: 'Caro', high: 'Vale muito' },
+];
+
+export const SIDE_SUGGESTIONS =['Arroz', 'Salada', 'Farofa', 'Purê', 'Batata', 'Pão', 'Legumes', 'Feijão', 'Molho', 'Massa', 'Polenta'];

@@ -8,6 +8,10 @@ App pessoal para **registrar e avaliar bebidas** (vinho, cerveja, destilados, co
 
 ## Funcionalidades
 
+**Início**
+- Mostra a última bebida cadastrada, a última receita cadastrada (e a última feita) e o último restaurante visitado.
+- Tem atalhos para criar registros e um resumo com totais.
+
 **Bebidas**
 - Campos comuns: nome, produtor, país, região, teor alcoólico, volume, preço, data, local, ocasião e fotos.
 - Campos específicos por tipo. Por exemplo: uvas, safra e barrica no vinho; estilo, IBU e espuma na cerveja; idade, madeira e cask strength nos destilados; processo, torra e método no café.
@@ -21,10 +25,16 @@ App pessoal para **registrar e avaliar bebidas** (vinho, cerveja, destilados, co
 - **Registro de preparos**: data, nota, porções, fotos, ajustes realizados, acompanhamentos e **bebidas que acompanharam**, sejam elas já cadastradas ou criadas na hora.
 - **Importar do Instagram / texto**: cole a legenda e o app separa título, ingredientes, preparo, dicas, porções, tempo e hashtags para você revisar. No Android, o app instalado também aparece em *Compartilhar*.
 
+**Restaurantes**
+- Cadastro com fotos, tipo de cozinha, faixa de preço, cidade, bairro, endereço (com link para o mapa), telefone, site ou Instagram e características.
+- Lista "📌 Quero conhecer" para lugares que você ainda não visitou.
+- **Histórico de visitas**: data, refeição, companhia, nota geral e notas por critério (comida, bebidas, atendimento, ambiente, custo-benefício). Também registra fotos, pratos pedidos, o destaque da visita, conta e número de pessoas, "voltaria?" e as **bebidas consumidas**, que ficam ligadas à aba Bebidas.
+
 **Estatísticas**
 - Visão geral: total por tipo, ranking, atividade mensal e gastos.
 - Por tipo: nota média, % que compraria de novo, preço e teor médios, e um radar sensorial médio comparado ao das suas favoritas. Também mostra distribuição por estilo, uva, país, região e outros, além dos aromas mais frequentes.
 - Receitas: mais feitas, melhor avaliadas, bebidas mais usadas nas harmonizações e utensílios.
+- Restaurantes: mais visitados, melhor avaliados, gasto médio por visita e por pessoa, média por critério, visitas por cozinha e por bairro, e pratos mais pedidos.
 
 ## Como publicar (uma vez) e instalar
 

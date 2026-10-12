@@ -2,6 +2,7 @@ import * as db from './db.js';
 import {
   DRINK_TYPES, typeById, COMMON_LABELS, COUNTRY_SUGGESTIONS,
   RECIPE_CATEGORIES, DIFFICULTIES, UTENSILS, SIDE_SUGGESTIONS,
+  CUISINES, PRICE_LEVELS, RESTAURANT_TAGS, VISIT_TYPES, VISIT_CRITERIA,
 } from './schemas.js';
 import { savePhotoFile, getPhoto, forgetPhoto, cleanOrphanPhotos } from './photos.js';
 import { exportBackup, importBackup } from './backup.js';
@@ -52,7 +53,7 @@ function setHeader(title, back = '') {
   const b = $('#back');
   b.hidden = !back;
   b.dataset.target = back;
-  document.title = `${title} · Adega & Receitas`;
+  document.title = title === 'Adega & Receitas' ? title : `${title} · Adega & Receitas`;
 }
 
 function paint(html) {
@@ -71,9 +72,9 @@ async function hydratePhotos(root) {
 
 async function deletePhotosIfUnused(ids) {
   if (!ids?.length) return;
-  const [drinks, recipes, logs] = await Promise.all(['drinks', 'recipes', 'logs'].map(db.getAll));
+  const all = (await Promise.all(db.PHOTO_OWNERS.map(db.getAll))).flat();
   const used = new Set();
-  for (const r of [...drinks, ...recipes, ...logs]) for (const id of r.photos || []) used.add(id);
+  for (const r of all) for (const id of r.photos || []) used.add(id);
   const gone = ids.filter(id => !used.has(id));
   gone.forEach(forgetPhoto);
   if (gone.length) await db.delMany('photos', gone);
@@ -173,11 +174,11 @@ function setRating(box, v) {
   $('output', box).textContent = v ? `${fmtRating(v)} / 5` : 'sem nota (toque 2× para meia estrela)';
 }
 
-function sensoryInput(axis, v) {
+function sensoryInput(axis, v, prefix = 'sensory') {
   const val = isNum(v) ? v : 0;
   return `<div class="sense">
     <div class="sense-head"><span>${esc(axis.label)}</span><output>${val || '—'}</output></div>
-    <input type="range" min="0" max="5" step="1" name="sensory.${axis.k}" data-num value="${val}">
+    <input type="range" min="0" max="5" step="1" name="${prefix}.${axis.k}" data-num value="${val}">
     <div class="sense-ends"><span>${esc(axis.low)}</span><span>${esc(axis.high)}</span></div>
   </div>`;
 }
@@ -194,6 +195,71 @@ function photoPicker(name, ids = []) {
 function gallery(ids) {
   if (!ids?.length) return '';
   return `<div class="gallery">${ids.map(id => `<div class="gal-item"><img data-photo="${esc(id)}" data-full data-zoom alt=""></div>`).join('')}</div>`;
+}
+
+// ---------- Seletor de bebidas (preparos de receitas e visitas a restaurantes) ----------
+
+async function sortedDrinks() {
+  return (await db.getAll('drinks')).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+
+function drinkPickerHTML(title, drinks) {
+  return `<section class="card"><h3>${esc(title)}</h3>
+    <div class="picked" id="picked"></div>
+    ${drinks.length ? `<select id="dp-select"><option value="">+ Escolher bebida já registrada…</option>
+      ${DRINK_TYPES.filter(t => drinks.some(d => d.type === t.id)).map(t => `<optgroup label="${t.icon} ${t.label}">${drinks.filter(d => d.type === t.id).map(d => `<option value="${esc(d.id)}">${esc(d.name)}${d.produtor ? ` – ${esc(d.produtor)}` : ''}</option>`).join('')}</optgroup>`).join('')}
+    </select>` : ''}
+    <details class="quick" ${drinks.length ? '' : 'open'}><summary>Registrar uma bebida nova</summary>
+      <div class="grid2">
+        ${field('Tipo', `<select id="dp-type">${DRINK_TYPES.map(t => `<option value="${t.id}">${t.icon} ${t.label}</option>`).join('')}</select>`)}
+        ${field('Nome', '<input id="dp-name" autocomplete="off">')}
+      </div>
+      <div class="field full"><span>Nota (opcional)</span>${ratingInput('_quickRating', 0)}</div>
+      <button type="button" class="btn small" id="dp-add">Adicionar bebida</button>
+      <p class="hint">Ela será criada na aba Bebidas, onde você pode completar a avaliação depois.</p>
+    </details>
+  </section>`;
+}
+
+// Bebidas novas só são gravadas ao salvar o formulário (cancelar não cria nada).
+// `extra` são campos aplicados às bebidas criadas aqui (ex.: notas, local).
+function bindDrinkPicker(drinks, initialIds = [], extra = {}) {
+  const known = new Map(drinks.map(d => [d.id, d]));
+  const quickNew = new Map();
+  const picked = new Set((initialIds || []).filter(id => known.has(id)));
+  const render = () => {
+    $('#picked').innerHTML = [...picked].map(id => {
+      const d = known.get(id) || quickNew.get(id);
+      return `<span class="tag">${typeById(d.type).icon} ${esc(d.name)}${quickNew.has(id) ? ' <small>(nova)</small>' : ''}<button type="button" data-unpick="${esc(id)}" aria-label="Remover">×</button></span>`;
+    }).join('') || '<p class="muted">Nenhuma bebida adicionada.</p>';
+  };
+  render();
+  $('#picked').addEventListener('click', e => {
+    const b = e.target.closest('[data-unpick]');
+    if (!b) return;
+    picked.delete(b.dataset.unpick);
+    quickNew.delete(b.dataset.unpick);
+    render();
+  });
+  $('#dp-select')?.addEventListener('change', e => { if (e.target.value) picked.add(e.target.value); e.target.value = ''; render(); });
+  $('#dp-add').onclick = () => {
+    const name = $('#dp-name').value.trim();
+    if (!name) { toast('Digite o nome da bebida'); return; }
+    const box = $('#dp-add').closest('details').querySelector('[data-rating]');
+    const d = { ...newDrink($('#dp-type').value), ...extra, name, rating: Number($('input', box).value) || 0 };
+    quickNew.set(d.id, d);
+    picked.add(d.id);
+    $('#dp-name').value = '';
+    setRating(box, 0);
+    render();
+  };
+  return {
+    async save(date) {
+      const newDrinks = [...quickNew.values()].filter(d => picked.has(d.id)).map(d => ({ ...d, date }));
+      if (newDrinks.length) await db.putMany('drinks', newDrinks);
+      return [...picked];
+    },
+  };
 }
 
 // Liga o comportamento de todos os widgets de um formulário
@@ -285,6 +351,7 @@ async function backupBanner() {
 const ui = {
   drinks: { type: '', q: '', sort: 'recent', fav: false },
   recipes: { cat: '', q: '', sort: 'recent', fav: false },
+  restaurants: { status: '', cuisine: '', q: '', sort: 'recent' },
 };
 
 function newDrink(type) {
@@ -460,12 +527,14 @@ function factsList(rows) {
   return `<dl class="facts">${r.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(Array.isArray(v) ? v.join(', ') : v)}</dd></div>`).join('')}</dl>`;
 }
 
-function sensoryBars(t, sensory) {
-  const rows = t.sensory.filter(a => sensory?.[a.k] > 0);
+const sensoryBars = (t, sensory) => axisBars(t.sensory, sensory);
+
+function axisBars(axes, values) {
+  const rows = axes.filter(a => values?.[a.k] > 0);
   if (!rows.length) return '';
   return `<div class="sbars">${rows.map(a => `<div class="sbar">
-      <div class="sbar-head"><span>${esc(a.label)}</span><b>${sensory[a.k]}/5</b></div>
-      <div class="bar"><i style="width:${sensory[a.k] * 20}%"></i></div>
+      <div class="sbar-head"><span>${esc(a.label)}</span><b>${fmtNum(values[a.k])}/5</b></div>
+      <div class="bar"><i style="width:${values[a.k] * 20}%"></i></div>
       <div class="sense-ends"><span>${esc(a.low)}</span><span>${esc(a.high)}</span></div></div>`).join('')}</div>`;
 }
 
@@ -474,9 +543,11 @@ async function drinkDetail(id) {
   if (!d) return notFound();
   const t = typeById(d.type);
   setHeader(t.label, '#/drinks');
-  const [logs, recipes] = await Promise.all([db.getAll('logs'), db.getAll('recipes')]);
+  const [logs, recipes, visits, restaurants] = await Promise.all(['logs', 'recipes', 'visits', 'restaurants'].map(db.getAll));
   const recipeById = new Map(recipes.map(r => [r.id, r]));
-  const pairings = logs.filter(l => (l.drinks || []).includes(id)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const restById = new Map(restaurants.map(r => [r.id, r]));
+  const pairings = logs.filter(l => (l.drinks || []).includes(id)).sort(byDateDesc);
+  const atRestaurants = visits.filter(v => (v.drinks || []).includes(id)).sort(byDateDesc);
   const loc = [d.regiao, d.pais].filter(Boolean).join(', ');
   const specRows = t.fields.map(f => [f.label, f.type === 'number' ? fmtNum(d.spec?.[f.k]) : d.spec?.[f.k]]);
 
@@ -506,6 +577,10 @@ async function drinkDetail(id) {
       const r = recipeById.get(l.recipeId);
       return r ? `<a href="#/recipes/${esc(r.id)}">🍳 ${esc(r.title)} <span class="muted">· ${fmtDate(l.date)}</span></a>` : '';
     }).join('')}</div></section>` : ''}
+    ${atRestaurants.length ? `<section class="card"><h3>Em restaurantes</h3><div class="mini-list">${atRestaurants.map(v => {
+      const r = restById.get(v.restaurantId);
+      return r ? `<a href="#/restaurants/${esc(r.id)}">🍽️ ${esc(r.name)} <span class="muted">· ${fmtDate(v.date)}</span></a>` : '';
+    }).join('')}</div></section>` : ''}
 
     <div class="actions">
       <a class="btn" href="#/drinks/${esc(id)}/edit">✏️ Editar</a>
@@ -516,8 +591,9 @@ async function drinkDetail(id) {
   $('#del').onclick = async () => {
     if (!confirm(`Excluir "${d.name}"? Essa ação não pode ser desfeita.`)) return;
     await db.del('drinks', id);
-    const touched = logs.filter(l => (l.drinks || []).includes(id)).map(l => ({ ...l, drinks: l.drinks.filter(x => x !== id), updatedAt: Date.now() }));
-    if (touched.length) await db.putMany('logs', touched);
+    const unlink = list => list.map(x => ({ ...x, drinks: x.drinks.filter(y => y !== id), updatedAt: Date.now() }));
+    if (pairings.length) await db.putMany('logs', unlink(pairings));
+    if (atRestaurants.length) await db.putMany('visits', unlink(atRestaurants));
     await deletePhotosIfUnused(d.photos);
     toast('Bebida excluída');
     location.replace('#/drinks');
@@ -791,10 +867,7 @@ async function logForm(logId, recipeId) {
   }
   const r = await db.get('recipes', recipeId);
   if (!r) return notFound();
-  const drinks = (await db.getAll('drinks')).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const known = new Map(drinks.map(d => [d.id, d]));
-  const quickNew = new Map(); // bebidas criadas aqui, só gravadas ao salvar
-  const picked = new Set((l.drinks || []).filter(id => known.has(id)));
+  const drinks = await sortedDrinks();
   setHeader(logId ? 'Editar preparo' : 'Registrar preparo', `#/recipes/${recipeId}`);
 
   paint(`<p class="hint center">🍳 ${esc(r.title)}</p>
@@ -812,21 +885,7 @@ async function logForm(logId, recipeId) {
       <textarea name="adjustments" rows="4">${esc(l.adjustments)}</textarea>
     </section>
     <section class="card"><h3>Acompanhamentos</h3>${tagInput('sides', l.sides, SIDE_SUGGESTIONS, 'Ex.: arroz, salada…')}</section>
-    <section class="card"><h3>Bebidas que acompanharam</h3>
-      <div class="picked" id="picked"></div>
-      ${drinks.length ? `<select id="dp-select"><option value="">+ Escolher bebida já registrada…</option>
-        ${DRINK_TYPES.filter(t => drinks.some(d => d.type === t.id)).map(t => `<optgroup label="${t.icon} ${t.label}">${drinks.filter(d => d.type === t.id).map(d => `<option value="${esc(d.id)}">${esc(d.name)}${d.produtor ? ` – ${esc(d.produtor)}` : ''}</option>`).join('')}</optgroup>`).join('')}
-      </select>` : ''}
-      <details class="quick" ${drinks.length ? '' : 'open'}><summary>Registrar uma bebida nova</summary>
-        <div class="grid2">
-          ${field('Tipo', `<select id="dp-type">${DRINK_TYPES.map(t => `<option value="${t.id}">${t.icon} ${t.label}</option>`).join('')}</select>`)}
-          ${field('Nome', '<input id="dp-name" autocomplete="off">')}
-        </div>
-        <div class="field full"><span>Nota (opcional)</span>${ratingInput('_quickRating', 0)}</div>
-        <button type="button" class="btn small" id="dp-add">Adicionar bebida</button>
-        <p class="hint">Ela será criada na aba Bebidas, onde você pode completar a avaliação depois.</p>
-      </details>
-    </section>
+    ${drinkPickerHTML('Bebidas que acompanharam', drinks)}
     <section class="card"><h3>Notas</h3><textarea name="notes" rows="3" placeholder="Quem comeu, ocasião, o que fazer diferente…">${esc(l.notes)}</textarea></section>
     <div class="form-actions">
       ${logId ? '<button type="button" class="btn danger" id="del">Excluir</button>' : ''}
@@ -836,32 +895,7 @@ async function logForm(logId, recipeId) {
 
   const form = $('#f');
   bindForm(form);
-  const renderPicked = () => {
-    $('#picked').innerHTML = [...picked].map(id => {
-      const d = known.get(id) || quickNew.get(id);
-      return `<span class="tag">${typeById(d.type).icon} ${esc(d.name)}${quickNew.has(id) ? ' <small>(nova)</small>' : ''}<button type="button" data-unpick="${esc(id)}" aria-label="Remover">×</button></span>`;
-    }).join('') || '<p class="muted">Nenhuma bebida adicionada.</p>';
-  };
-  renderPicked();
-  $('#picked').addEventListener('click', e => {
-    const b = e.target.closest('[data-unpick]');
-    if (!b) return;
-    picked.delete(b.dataset.unpick);
-    quickNew.delete(b.dataset.unpick);
-    renderPicked();
-  });
-  $('#dp-select')?.addEventListener('change', e => { if (e.target.value) picked.add(e.target.value); e.target.value = ''; renderPicked(); });
-  $('#dp-add').onclick = () => {
-    const name = $('#dp-name').value.trim();
-    if (!name) { toast('Digite o nome da bebida'); return; }
-    const box = $('#dp-add').closest('details').querySelector('[data-rating]');
-    const d = { ...newDrink($('#dp-type').value), name, rating: Number($('input', box).value) || 0, notes: `Registrada no preparo de "${r.title}".` };
-    quickNew.set(d.id, d);
-    picked.add(d.id);
-    $('#dp-name').value = '';
-    setRating(box, 0);
-    renderPicked();
-  };
+  const picker = bindDrinkPicker(drinks, l.drinks, { notes: `Registrada no preparo de "${r.title}".` });
   $('#del')?.addEventListener('click', async () => {
     if (!confirm('Excluir este registro de preparo?')) return;
     await db.del('logs', l.id);
@@ -874,9 +908,8 @@ async function logForm(logId, recipeId) {
     const data = collectForm(form);
     delete data._quickRating;
     const date = data.date || today();
-    const newDrinks = [...quickNew.values()].filter(d => picked.has(d.id)).map(d => ({ ...d, date }));
-    if (newDrinks.length) await db.putMany('drinks', newDrinks);
-    const saved = { ...l, ...data, date, rating: data.rating || 0, drinks: [...picked], updatedAt: Date.now() };
+    const drinkIds = await picker.save(date);
+    const saved = { ...l, ...data, date, rating: data.rating || 0, drinks: drinkIds, updatedAt: Date.now() };
     await db.put('logs', saved);
     if (logId) await deletePhotosIfUnused((l.photos || []).filter(p => !saved.photos.includes(p)));
     toast('Preparo registrado');
@@ -925,6 +958,402 @@ function recipeImport() {
     pendingDraft = parsed;
     location.replace('#/recipes/new?draft=1');
   });
+}
+
+// ================= Restaurantes =================
+
+const byDateDesc = (a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0);
+
+function newRestaurant() {
+  return {
+    id: db.uid(), name: '', cuisine: '', city: '', neighborhood: '', address: '', phone: '', website: '',
+    priceLevel: '', wishlist: false, tags: [], notes: '', photos: [], favorite: false,
+    createdAt: Date.now(), updatedAt: Date.now(),
+  };
+}
+
+function newVisit(restaurantId) {
+  return {
+    id: db.uid(), restaurantId, date: today(), mealType: '', company: '', dishes: [], bestDish: '', drinks: [],
+    scores: {}, rating: 0, spent: '', people: '', returnAgain: '', notes: '', photos: [],
+    createdAt: Date.now(), updatedAt: Date.now(),
+  };
+}
+
+function restaurantStats(r, visits) {
+  const mine = visits.filter(v => v.restaurantId === r.id).sort(byDateDesc);
+  return { visits: mine, count: mine.length, avg: avg(mine.map(v => v.rating)), last: mine[0]?.date, lastPhoto: mine.find(v => v.photos?.length)?.photos[0] };
+}
+
+const restaurantPlace = r => [r.neighborhood, r.city].filter(Boolean).join(', ');
+
+async function restaurantList() {
+  setHeader('Restaurantes');
+  const [all, visits] = await Promise.all([db.getAll('restaurants'), db.getAll('visits')]);
+  const st = ui.restaurants;
+  const stats = new Map(all.map(r => [r.id, restaurantStats(r, visits)]));
+  const cuisines = [...new Set(all.map(r => r.cuisine).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const nWish = all.filter(r => r.wishlist).length;
+
+  paint(`<div class="toolbar">
+      <input type="search" id="q" placeholder="Buscar por nome, cozinha, bairro, prato…" value="${esc(st.q)}">
+      <select id="sort" aria-label="Ordenar">
+        <option value="recent">Visita recente</option><option value="rating">Melhor nota</option><option value="count">Mais visitados</option><option value="name">Nome</option>
+      </select>
+    </div>
+    ${all.length ? `<div class="filter-chips" id="status">
+      <button class="chip ${!st.status ? 'on' : ''}" data-status="">Todos (${all.length})</button>
+      <button class="chip ${st.status === 'visited' ? 'on' : ''}" data-status="visited">Já fui</button>
+      ${nWish ? `<button class="chip ${st.status === 'wish' ? 'on' : ''}" data-status="wish">📌 Quero conhecer (${nWish})</button>` : ''}
+      <button class="chip ${st.status === 'fav' ? 'on' : ''}" data-status="fav">♥ Favoritos</button>
+    </div>` : ''}
+    ${cuisines.length > 1 ? `<div class="filter-chips" id="cuisines">${cuisines.map(c => `<button class="chip ${st.cuisine === c ? 'on' : ''}" data-cuisine="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+    <div id="list" class="list"></div>
+    <a class="fab" href="#/restaurants/new" aria-label="Novo restaurante">＋</a>`);
+
+  $('#sort').value = st.sort;
+  const renderItems = () => {
+    const q = norm(st.q);
+    let items = all.filter(r => {
+      const s = stats.get(r.id);
+      if (st.status === 'visited' && !s.count) return false;
+      if (st.status === 'wish' && !r.wishlist) return false;
+      if (st.status === 'fav' && !r.favorite) return false;
+      if (st.cuisine && r.cuisine !== st.cuisine) return false;
+      return !q || norm([r.name, r.cuisine, r.city, r.neighborhood, r.address, (r.tags || []).join(' '), s.visits.flatMap(v => v.dishes || []).join(' ')].join(' ')).includes(q);
+    });
+    const S = id => stats.get(id);
+    if (st.sort === 'rating') items.sort((a, b) => (S(b.id).avg || 0) - (S(a.id).avg || 0));
+    else if (st.sort === 'count') items.sort((a, b) => S(b.id).count - S(a.id).count);
+    else if (st.sort === 'name') items.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    else items.sort((a, b) => (S(b.id).last || '').localeCompare(S(a.id).last || '') || b.updatedAt - a.updatedAt);
+    $('#list').innerHTML = items.length ? items.map(r => restaurantItem(r, S(r.id))).join('')
+      : all.length ? '<div class="empty">Nada encontrado com esses filtros.</div>'
+        : `<div class="empty"><div class="empty-icon">🍽️</div><p>Nenhum restaurante cadastrado.</p><a class="btn primary" href="#/restaurants/new">Adicionar restaurante</a></div>`;
+    hydratePhotos($('#list'));
+  };
+  renderItems();
+  $('#q').addEventListener('input', e => { st.q = e.target.value; renderItems(); });
+  $('#sort').addEventListener('change', e => { st.sort = e.target.value; renderItems(); });
+  $('#status')?.addEventListener('click', e => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    st.status = b.dataset.status;
+    $$('#status .chip').forEach(c => c.classList.toggle('on', c.dataset.status === st.status));
+    renderItems();
+  });
+  $('#cuisines')?.addEventListener('click', e => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    st.cuisine = st.cuisine === b.dataset.cuisine ? '' : b.dataset.cuisine;
+    $$('#cuisines .chip').forEach(c => c.classList.toggle('on', c.dataset.cuisine === st.cuisine));
+    renderItems();
+  });
+}
+
+function restaurantItem(r, s) {
+  const photo = r.photos?.[0] || s.lastPhoto;
+  const thumb = photo ? `<img class="thumb" data-photo="${esc(photo)}" alt="">` : '<div class="thumb empty" style="--c:#2f6f8f">🍽️</div>';
+  const meta = s.count
+    ? `${stars(s.avg)}<span>${s.count} visita${s.count > 1 ? 's' : ''} · ${fmtDate(s.last)}</span>`
+    : r.wishlist ? '<span class="pill">📌 quero conhecer</span>' : '<span class="muted">sem visitas registradas</span>';
+  return `<a class="item" href="#/restaurants/${esc(r.id)}">${thumb}<div class="item-body">
+    <div class="item-title">${r.favorite ? '<span class="fav">♥</span> ' : ''}${esc(r.name)}</div>
+    <div class="item-sub">${esc([r.cuisine, restaurantPlace(r), r.priceLevel].filter(Boolean).join(' · ') || 'Restaurante')}</div>
+    <div class="item-meta">${meta}</div>
+  </div></a>`;
+}
+
+async function restaurantForm(id) {
+  let r;
+  if (id) {
+    r = await db.get('restaurants', id);
+    if (!r) return notFound();
+  } else {
+    r = newRestaurant();
+  }
+  setHeader(id ? 'Editar restaurante' : 'Novo restaurante', id ? `#/restaurants/${id}` : '#/restaurants');
+
+  paint(`<form class="form" id="f" novalidate>
+    <section class="card"><h3>Fotos</h3><p class="hint">Fachada, ambiente, cardápio… (fotos dos pratos ficam melhor em cada visita)</p>${photoPicker('photos', r.photos)}</section>
+
+    <section class="card"><h3>Identificação</h3>
+      ${field('Nome *', textInput('name', r.name, 'required autocomplete="off"'), 'full')}
+      <div class="grid2">
+        ${field('Tipo de cozinha', comboInput('cuisine', CUISINES, r.cuisine))}
+        <div class="field"><span>Faixa de preço</span>${segInput('priceLevel', PRICE_LEVELS, r.priceLevel)}</div>
+        ${field('Cidade', textInput('city', r.city))}
+        ${field('Bairro', textInput('neighborhood', r.neighborhood))}
+      </div>
+      ${field('Endereço', textInput('address', r.address), 'full')}
+      <div class="grid2">
+        ${field('Telefone', textInput('phone', r.phone, 'inputmode="tel"'))}
+        ${field('Site / Instagram', textInput('website', r.website, 'inputmode="url" placeholder="https://… ou @perfil"'))}
+      </div>
+    </section>
+
+    <section class="card"><h3>Características</h3>${tagInput('tags', r.tags, RESTAURANT_TAGS)}</section>
+
+    <section class="card"><h3>Observações</h3>
+      <textarea name="notes" rows="3" placeholder="Melhor horário, quem indicou, o que pedir…">${esc(r.notes)}</textarea>
+      <label class="check"><input type="checkbox" name="wishlist" ${r.wishlist ? 'checked' : ''}> 📌 Quero conhecer (ainda não fui)</label>
+      <label class="check"><input type="checkbox" name="favorite" ${r.favorite ? 'checked' : ''}> ♥ Favorito</label>
+    </section>
+
+    <div class="form-actions"><button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Salvar</button></div>
+  </form>`);
+
+  const form = $('#f');
+  bindForm(form);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = collectForm(form);
+    if (!data.name) { toast('Informe o nome do restaurante'); form.elements.namedItem('name').focus(); return; }
+    const saved = { ...r, ...data, updatedAt: Date.now() };
+    await db.put('restaurants', saved);
+    if (id) await deletePhotosIfUnused((r.photos || []).filter(p => !saved.photos.includes(p)));
+    toast('Restaurante salvo');
+    location.replace(`#/restaurants/${saved.id}`);
+  });
+}
+
+function externalLink(v) {
+  if (!v) return '';
+  if (/^https?:\/\//i.test(v)) return `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v.replace(/^https?:\/\/(www\.)?/i, ''))}</a>`;
+  const handle = v.match(/^@([\w.]{1,30})$/);
+  if (handle) return `<a href="https://www.instagram.com/${esc(handle[1])}/" target="_blank" rel="noopener noreferrer">${esc(v)}</a>`;
+  return esc(v);
+}
+
+async function restaurantDetail(id) {
+  const r = await db.get('restaurants', id);
+  if (!r) return notFound();
+  setHeader('Restaurante', '#/restaurants');
+  const [visits, drinks] = await Promise.all([db.getAll('visits'), db.getAll('drinks')]);
+  const drinkById = new Map(drinks.map(d => [d.id, d]));
+  const s = restaurantStats(r, visits);
+  const scoreAvg = Object.fromEntries(VISIT_CRITERIA.map(c => [c.k, Math.round((avg(s.visits.map(v => v.scores?.[c.k])) || 0) * 10) / 10]));
+  const dishes = groupBy(s.visits, v => v.dishes || [], v => v.rating);
+  const spentVisits = s.visits.filter(v => isNum(v.spent));
+  const mapsQuery = [r.name, r.address, r.neighborhood, r.city].filter(Boolean).join(', ');
+  const back = s.visits.filter(v => v.returnAgain);
+
+  paint(`${gallery(r.photos)}
+    <div class="detail-head">
+      ${r.cuisine ? `<span class="badge" style="--c:#2f6f8f">${esc(r.cuisine)}</span>` : ''}
+      ${r.wishlist ? '<span class="badge" style="--c:#c0622b">📌 Quero conhecer</span>' : ''}
+      <h2>${r.favorite ? '<span class="fav">♥</span> ' : ''}${esc(r.name)}</h2>
+      ${restaurantPlace(r) || r.priceLevel ? `<p class="muted">${esc([restaurantPlace(r), r.priceLevel].filter(Boolean).join(' · '))}</p>` : ''}
+      <div class="rating-line">${s.count ? `${stars(s.avg, 'big')} <b>${fmtRating(s.avg)}</b><span class="pill">${s.count} visita${s.count > 1 ? 's' : ''} · última em ${fmtDate(s.last)}</span>` : '<span class="pill">Nenhuma visita registrada</span>'}</div>
+    </div>
+
+    <div class="actions"><a class="btn primary" href="#/restaurants/${esc(id)}/visit">🍽️ Registrar visita</a></div>
+
+    ${r.address || r.phone || r.website ? `<section class="card"><h3>Contato</h3>
+      ${r.address ? `<p class="src">📍 ${esc(r.address)} · <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}" target="_blank" rel="noopener noreferrer">abrir no mapa</a></p>` : ''}
+      ${r.phone ? `<p class="src">📞 <a href="tel:${esc(r.phone.replace(/[^\d+]/g, ''))}">${esc(r.phone)}</a></p>` : ''}
+      ${r.website ? `<p class="src">🔗 ${externalLink(r.website)}</p>` : ''}
+    </section>` : ''}
+    ${r.tags?.length ? `<section class="card"><h3>Características</h3><div class="chips ro">${r.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div></section>` : ''}
+    ${r.notes ? `<section class="card"><h3>Observações</h3><p class="pre">${esc(r.notes)}</p></section>` : ''}
+    ${s.count ? `<section class="card"><h3>Resumo das visitas</h3>
+      ${kpis([
+        ['gasto médio', spentVisits.length ? fmtMoney(spentVisits.reduce((a, v) => a + v.spent, 0) / spentVisits.length) : '—'],
+        ['voltaria', back.length ? `${Math.round((back.filter(v => v.returnAgain === 'Sim').length / back.length) * 100)}%` : '—'],
+      ])}
+      ${axisBars(VISIT_CRITERIA, scoreAvg)}
+      ${dishes.length ? `<h4 class="sub">Pratos já pedidos</h4>${barList(dishes, { limit: 10 })}` : ''}
+    </section>` : ''}
+
+    <section class="card"><h3>Histórico de visitas (${s.count})</h3>
+      ${s.count ? s.visits.map(v => visitCard(v, drinkById)).join('') : '<p class="muted">Quando for a este restaurante, registre a visita: fotos, pratos, bebidas, conta e notas.</p>'}
+    </section>
+
+    <div class="actions">
+      <a class="btn" href="#/restaurants/${esc(id)}/edit">✏️ Editar</a>
+      <button class="btn danger" id="del">🗑 Excluir</button>
+    </div>`);
+
+  $('#del').onclick = async () => {
+    const extra = s.count ? ` e ${s.count} visita(s) registrada(s)` : '';
+    if (!confirm(`Excluir "${r.name}"${extra}? Essa ação não pode ser desfeita.`)) return;
+    await db.del('restaurants', id);
+    await db.delMany('visits', s.visits.map(v => v.id));
+    await deletePhotosIfUnused([...(r.photos || []), ...s.visits.flatMap(v => v.photos || [])]);
+    toast('Restaurante excluído');
+    location.replace('#/restaurants');
+  };
+}
+
+function visitCard(v, drinkById) {
+  const drinks = (v.drinks || []).map(id => drinkById.get(id)).filter(Boolean);
+  const scores = VISIT_CRITERIA.filter(c => v.scores?.[c.k] > 0).map(c => `${c.label} ${v.scores[c.k]}`);
+  const bill = [isNum(v.spent) ? fmtMoney(v.spent) : '', isNum(v.people) ? `${v.people} pessoa${v.people > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ');
+  return `<article class="log">
+    <div class="log-head"><b>${fmtDate(v.date)}</b>${v.mealType ? `<span class="muted">${esc(v.mealType)}</span>` : ''}${v.rating ? stars(v.rating) : ''}
+      <a class="link" href="#/visits/${esc(v.id)}/edit">editar</a></div>
+    ${v.photos?.length ? `<div class="log-photos">${v.photos.map(p => `<div class="log-ph"><img data-photo="${esc(p)}" data-zoom alt=""></div>`).join('')}</div>` : ''}
+    ${v.dishes?.length ? `<p><small class="lbl">Pedidos</small>${v.dishes.map(esc).join(', ')}</p>` : ''}
+    ${v.bestDish ? `<p><small class="lbl">Destaque</small>${esc(v.bestDish)}</p>` : ''}
+    ${drinks.length ? `<p><small class="lbl">Bebidas</small></p><div class="mini-list">${drinks.map(d => `<a href="#/drinks/${esc(d.id)}">${typeById(d.type).icon} ${esc(d.name)} ${d.rating ? stars(d.rating) : '<span class="muted">· avaliar</span>'}</a>`).join('')}</div>` : ''}
+    ${scores.length ? `<p><small class="lbl">Notas</small>${esc(scores.join(' · '))}</p>` : ''}
+    ${bill ? `<p><small class="lbl">Conta</small>${esc(bill)}</p>` : ''}
+    ${v.company ? `<p><small class="lbl">Com quem</small>${esc(v.company)}</p>` : ''}
+    ${v.returnAgain ? `<p><small class="lbl">Voltaria?</small>${esc(v.returnAgain)}</p>` : ''}
+    ${v.notes ? `<p><small class="lbl">Comentários</small><span class="pre">${esc(v.notes)}</span></p>` : ''}
+  </article>`;
+}
+
+async function visitForm(visitId, restaurantId) {
+  let v;
+  if (visitId) {
+    v = await db.get('visits', visitId);
+    if (!v) return notFound();
+    restaurantId = v.restaurantId;
+  } else {
+    v = newVisit(restaurantId);
+  }
+  const r = await db.get('restaurants', restaurantId);
+  if (!r) return notFound();
+  const [drinks, visits] = await Promise.all([sortedDrinks(), db.getAll('visits')]);
+  const pastDishes = [...new Set(visits.filter(x => x.restaurantId === restaurantId).flatMap(x => x.dishes || []))];
+  setHeader(visitId ? 'Editar visita' : 'Registrar visita', `#/restaurants/${restaurantId}`);
+
+  paint(`<p class="hint center">🍽️ ${esc(r.name)}</p>
+  <form class="form" id="f" novalidate>
+    <section class="card"><h3>Como foi</h3>
+      <div class="grid2">
+        ${field('Data', `<input type="date" name="date" value="${esc(v.date)}">`)}
+        ${field('Refeição', selectInput('mealType', VISIT_TYPES, v.mealType))}
+      </div>
+      ${field('Com quem / ocasião', textInput('company', v.company), 'full')}
+      <div class="field full"><span>Nota geral da visita</span>${ratingInput('rating', v.rating)}</div>
+    </section>
+    <section class="card"><h3>Avaliação por critério</h3><p class="hint">Deixe em 0 o que não quiser avaliar.</p>
+      <div class="senses">${VISIT_CRITERIA.map(c => sensoryInput(c, v.scores?.[c.k], 'scores')).join('')}</div>
+    </section>
+    <section class="card"><h3>Fotos</h3>${photoPicker('photos', v.photos)}</section>
+    <section class="card"><h3>O que pediu</h3>
+      ${tagInput('dishes', v.dishes, pastDishes, 'Nome do prato…')}
+      ${field('Destaque da visita', textInput('bestDish', v.bestDish, 'placeholder="O prato que mais gostou"'), 'full')}
+    </section>
+    ${drinkPickerHTML('Bebidas', drinks)}
+    <section class="card"><h3>Conta</h3>
+      <div class="grid2">
+        ${field('Valor total (R$)', numInput('spent', v.spent))}
+        ${field('Nº de pessoas', numInput('people', v.people))}
+      </div>
+      <div class="field full"><span>Voltaria?</span>${segInput('returnAgain', ['Sim', 'Talvez', 'Não'], v.returnAgain)}</div>
+    </section>
+    <section class="card"><h3>Comentários</h3><textarea name="notes" rows="3" placeholder="Atendimento, espera, o que pedir na próxima…">${esc(v.notes)}</textarea></section>
+    <div class="form-actions">
+      ${visitId ? '<button type="button" class="btn danger" id="del">Excluir</button>' : ''}
+      <button type="button" class="btn ghost" data-cancel>Cancelar</button><button class="btn primary" type="submit">Salvar</button>
+    </div>
+  </form>`);
+
+  const form = $('#f');
+  bindForm(form);
+  const picker = bindDrinkPicker(drinks, v.drinks, { place: r.name, notes: `Provada no restaurante "${r.name}".` });
+  $('#del')?.addEventListener('click', async () => {
+    if (!confirm('Excluir este registro de visita?')) return;
+    await db.del('visits', v.id);
+    await deletePhotosIfUnused(v.photos);
+    toast('Visita excluída');
+    location.replace(`#/restaurants/${restaurantId}`);
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const data = collectForm(form);
+    delete data._quickRating;
+    const date = data.date || today();
+    const drinkIds = await picker.save(date);
+    const saved = { ...v, ...data, date, scores: data.scores || {}, rating: data.rating || 0, drinks: drinkIds, updatedAt: Date.now() };
+    await db.put('visits', saved);
+    if (r.wishlist) await db.put('restaurants', { ...r, wishlist: false, updatedAt: Date.now() });
+    if (visitId) await deletePhotosIfUnused((v.photos || []).filter(p => !saved.photos.includes(p)));
+    toast('Visita registrada');
+    location.replace(`#/restaurants/${restaurantId}`);
+  });
+}
+
+// ================= Início =================
+
+function featureCard({ href, photo, icon, color, badge, title, sub, rating, extra }) {
+  const img = photo ? `<img data-photo="${esc(photo)}" alt="">` : `<div class="feature-icon" style="--c:${color}">${icon}</div>`;
+  return `<a class="feature" href="${href}">
+    <div class="feature-img">${img}</div>
+    <div class="feature-body">
+      ${badge ? `<span class="badge" style="--c:${color}">${badge}</span>` : ''}
+      <b>${esc(title)}</b>
+      ${sub ? `<span class="muted">${esc(sub)}</span>` : ''}
+      <div class="item-meta">${rating ? `${stars(rating)} <b>${fmtRating(rating)}</b>` : ''}${extra ? `<span>${extra}</span>` : ''}</div>
+    </div></a>`;
+}
+
+const emptyFeature = (href, text) => `<a class="feature empty" href="${href}"><span>＋</span>${esc(text)}</a>`;
+
+async function homeView() {
+  setHeader('Adega & Receitas');
+  const [drinks, recipes, logs, restaurants, visits] = await Promise.all(['drinks', 'recipes', 'logs', 'restaurants', 'visits'].map(db.getAll));
+  const byCreated = (a, b) => (b.createdAt || 0) - (a.createdAt || 0);
+  const lastDrink = [...drinks].sort(byCreated)[0];
+  const lastRecipe = [...recipes].sort(byCreated)[0];
+  const lastLog = [...logs].sort(byDateDesc)[0];
+  const lastLogRecipe = lastLog && recipes.find(r => r.id === lastLog.recipeId);
+  const lastVisit = [...visits].sort(byDateDesc)[0];
+  const lastVisitRest = lastVisit && restaurants.find(r => r.id === lastVisit.restaurantId);
+  const wish = restaurants.filter(r => r.wishlist).length;
+  const h = new Date().getHours();
+  const greet = h < 5 ? 'Boa noite' : h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+
+  let drinkHTML = emptyFeature('#/drinks/new', 'Registrar a primeira bebida');
+  if (lastDrink) {
+    const t = typeById(lastDrink.type);
+    drinkHTML = featureCard({
+      href: `#/drinks/${esc(lastDrink.id)}`, photo: lastDrink.photos?.[0], icon: t.icon, color: t.color,
+      badge: `${t.icon} ${t.label}`, title: lastDrink.name, sub: drinkSubtitle(lastDrink), rating: lastDrink.rating, extra: fmtDate(lastDrink.date),
+    });
+  }
+
+  let recipeHTML = emptyFeature('#/recipes/new', 'Criar a primeira receita');
+  if (lastRecipe) {
+    recipeHTML = featureCard({
+      href: `#/recipes/${esc(lastRecipe.id)}`, photo: lastRecipe.photos?.[0], icon: '🍳', color: '#c0622b',
+      badge: lastRecipe.category ? esc(lastRecipe.category) : '', title: lastRecipe.title,
+      sub: [fmtMinutes(lastRecipe.totalTime), lastRecipe.difficulty].filter(Boolean).join(' · '),
+      extra: `cadastrada em ${new Date(lastRecipe.createdAt).toLocaleDateString('pt-BR')}`,
+    });
+    if (lastLogRecipe) recipeHTML += `<a class="home-note" href="#/recipes/${esc(lastLogRecipe.id)}">🍳 Última feita: <b>${esc(lastLogRecipe.title)}</b> em ${fmtDate(lastLog.date)}</a>`;
+  }
+
+  let restHTML = emptyFeature(restaurants.length ? '#/restaurants' : '#/restaurants/new', restaurants.length ? 'Registrar sua primeira visita' : 'Adicionar um restaurante');
+  if (lastVisitRest) {
+    restHTML = featureCard({
+      href: `#/restaurants/${esc(lastVisitRest.id)}`, photo: lastVisit.photos?.[0] || lastVisitRest.photos?.[0], icon: '🍽️', color: '#2f6f8f',
+      badge: lastVisitRest.cuisine ? esc(lastVisitRest.cuisine) : '', title: lastVisitRest.name,
+      sub: [restaurantPlace(lastVisitRest), lastVisit.bestDish && `destaque: ${lastVisit.bestDish}`].filter(Boolean).join(' · '),
+      rating: lastVisit.rating, extra: [lastVisit.mealType, fmtDate(lastVisit.date)].filter(Boolean).map(esc).join(' · '),
+    });
+  }
+  if (wish) restHTML += `<a class="home-note" href="#/restaurants">📌 ${wish} restaurante${wish > 1 ? 's' : ''} na lista “quero conhecer”</a>`;
+
+  paint(`${await backupBanner()}
+    <p class="greet">${greet}! 👋</p>
+    <div class="quick-actions">
+      <a href="#/drinks/new"><span>🍷</span>Nova bebida</a>
+      <a href="#/recipes/new"><span>📖</span>Nova receita</a>
+      <a href="${restaurants.length ? '#/restaurants' : '#/restaurants/new'}" id="qa-visit"><span>🍽️</span>${restaurants.length ? 'Nova visita' : 'Novo restaurante'}</a>
+    </div>
+    <section class="home-sec"><div class="home-head"><h3>🍷 Última bebida cadastrada</h3><a href="#/drinks">ver todas</a></div>${drinkHTML}</section>
+    <section class="home-sec"><div class="home-head"><h3>📖 Última receita cadastrada</h3><a href="#/recipes">ver todas</a></div>${recipeHTML}</section>
+    <section class="home-sec"><div class="home-head"><h3>🍽️ Último restaurante visitado</h3><a href="#/restaurants">ver todos</a></div>${restHTML}</section>
+    <a class="home-stats" href="#/stats">
+      ${kpis([['bebidas', drinks.length], ['receitas', recipes.length], ['restaurantes', restaurants.length], ['visitas', visits.length]])}
+      <span>📊 Ver estatísticas completas ›</span>
+    </a>`);
+
+  if (restaurants.length) $('#qa-visit').addEventListener('click', () => toast('Escolha o restaurante (ou toque em ＋ para um novo) e depois em “Registrar visita”'));
 }
 
 // ================= Estatísticas =================
@@ -1004,16 +1433,18 @@ function topList(drinks, n = 5, worst = false) {
 }
 
 async function statsView(sub) {
-  setHeader('Estatísticas');
-  const [drinks, recipes, logs] = await Promise.all(['drinks', 'recipes', 'logs'].map(db.getAll));
+  setHeader('Estatísticas', '#/more');
+  const [drinks, recipes, logs, restaurants, visits] = await Promise.all(['drinks', 'recipes', 'logs', 'restaurants', 'visits'].map(db.getAll));
   const usedTypes = DRINK_TYPES.filter(t => drinks.some(d => d.type === t.id));
   const tabs = `<div class="filter-chips">
     <a class="chip ${!sub ? 'on' : ''}" href="#/stats">Geral</a>
     ${usedTypes.map(t => `<a class="chip ${sub === t.id ? 'on' : ''}" href="#/stats/${t.id}">${t.icon} ${t.label}</a>`).join('')}
     <a class="chip ${sub === 'receitas' ? 'on' : ''}" href="#/stats/receitas">🍳 Receitas</a>
+    <a class="chip ${sub === 'restaurantes' ? 'on' : ''}" href="#/stats/restaurantes">🍽️ Restaurantes</a>
   </div>`;
 
   if (sub === 'receitas') return paint(tabs + recipeStatsHTML(recipes, logs, drinks));
+  if (sub === 'restaurantes') return paint(tabs + restaurantStatsHTML(restaurants, visits, drinks));
   if (sub) {
     const t = typeById(sub);
     return paint(tabs + typeStatsHTML(t, drinks.filter(d => d.type === t.id)));
@@ -1026,15 +1457,15 @@ async function statsView(sub) {
   });
   const maxN = Math.max(1, ...byType.map(x => x.n));
   paint(`${tabs}
-    ${kpis([['bebidas registradas', drinks.length], ['nota média', fmtRating(avg(drinks.map(d => d.rating)))], ['receitas', recipes.length], ['vezes cozinhadas', logs.length]])}
+    ${kpis([['bebidas registradas', drinks.length], ['nota média', fmtRating(avg(drinks.map(d => d.rating)))], ['receitas', recipes.length], ['vezes cozinhadas', logs.length], ['restaurantes', restaurants.length], ['visitas', visits.length]])}
     <section class="card"><h3>Por tipo de bebida</h3>
       ${byType.length ? `<div class="bars">${byType.map(x => `<a class="bar-row" href="#/stats/${x.t.id}">
         <span class="bar-label">${x.t.icon} ${x.t.label}</span><div class="bar"><i style="width:${(x.n / maxN) * 100}%;background:${x.t.color}"></i></div>
         <span class="bar-val">${x.n}${x.avg ? ` · ★${fmtRating(x.avg)}` : ''}</span></a>`).join('')}</div>` : '<p class="muted">Registre bebidas para ver estatísticas.</p>'}
     </section>
     <section class="card"><h3>Melhores avaliadas</h3>${topList(drinks)}</section>
-    <section class="card"><h3>Atividade nos últimos 12 meses</h3>${monthlyActivity([...drinks.map(d => d.date), ...logs.map(l => l.date)])}
-      <p class="hint">Bebidas provadas + receitas preparadas por mês.</p></section>
+    <section class="card"><h3>Atividade nos últimos 12 meses</h3>${monthlyActivity([...drinks.map(d => d.date), ...logs.map(l => l.date), ...visits.map(v => v.date)])}
+      <p class="hint">Bebidas provadas + receitas preparadas + visitas a restaurantes, por mês.</p></section>
     ${spent ? `<section class="card"><h3>Gastos registrados</h3>${kpis([['total', fmtMoney(spent)], ['média por bebida', fmtMoney(spent / drinks.filter(d => isNum(d.price)).length)]])}</section>` : ''}`);
 }
 
@@ -1094,20 +1525,53 @@ function recipeStatsHTML(recipes, logs, drinks) {
     <section class="card"><h3>Preparos por mês</h3>${monthlyActivity(logs.map(l => l.date))}</section>`;
 }
 
+function restaurantStatsHTML(restaurants, visits, drinks) {
+  if (!restaurants.length) return '<div class="empty">Nenhum restaurante cadastrado.</div>';
+  const byRest = restaurants.map(r => ({ r, ...restaurantStats(r, visits) }));
+  const visited = byRest.filter(x => x.count);
+  const restById = new Map(restaurants.map(r => [r.id, r]));
+  const drinkById = new Map(drinks.map(d => [d.id, d]));
+  const spent = visits.filter(v => isNum(v.spent));
+  const perPerson = spent.filter(v => isNum(v.people) && v.people > 0);
+  const back = visits.filter(v => v.returnAgain);
+  const criteria = VISIT_CRITERIA.map(c => avg(visits.map(v => v.scores?.[c.k])) || 0);
+  const link = x => `<a href="#/restaurants/${esc(x.r.id)}">${esc(x.r.name)} <span class="muted">· ${x.count}× ${x.avg ? `· ★${fmtRating(x.avg)}` : ''}</span></a>`;
+  const ofVisit = fn => v => { const r = restById.get(v.restaurantId); return r && fn(r) ? [fn(r)] : []; };
+
+  return `${kpis([
+    ['restaurantes', restaurants.length],
+    ['visitas', visits.length],
+    ['nota média das visitas', fmtRating(avg(visits.map(v => v.rating)))],
+    ['gasto médio por visita', spent.length ? fmtMoney(spent.reduce((a, v) => a + v.spent, 0) / spent.length) : '—'],
+    ['gasto médio por pessoa', perPerson.length ? fmtMoney(perPerson.reduce((a, v) => a + v.spent / v.people, 0) / perPerson.length) : '—'],
+    ['voltariam', back.length ? `${Math.round((back.filter(v => v.returnAgain === 'Sim').length / back.length) * 100)}%` : '—'],
+  ])}
+    ${criteria.filter(v => v > 0).length >= 3 ? `<section class="card"><h3>Média por critério</h3>${radar(VISIT_CRITERIA, [{ label: 'Média das visitas', values: criteria, cls: 's1' }])}</section>` : ''}
+    <section class="card"><h3>Mais visitados</h3>${visited.length ? `<div class="mini-list">${[...visited].sort((a, b) => b.count - a.count).slice(0, 8).map(link).join('')}</div>` : '<p class="muted">Registre visitas para ver aqui.</p>'}</section>
+    <section class="card"><h3>Melhor avaliados</h3>${visited.some(x => x.avg) ? `<div class="mini-list">${visited.filter(x => x.avg).sort((a, b) => b.avg - a.avg).slice(0, 8).map(link).join('')}</div>` : '<p class="muted">Dê notas às visitas.</p>'}</section>
+    <section class="card"><h3>Visitas por tipo de cozinha</h3>${barList(groupBy(visits, ofVisit(r => r.cuisine), v => v.rating))}<p class="hint">visitas · nota média</p></section>
+    <section class="card"><h3>Visitas por bairro / cidade</h3>${barList(groupBy(visits, ofVisit(r => restaurantPlace(r)), v => v.rating))}</section>
+    <section class="card"><h3>Pratos mais pedidos</h3>${barList(groupBy(visits, v => v.dishes || [], v => v.rating), { limit: 10 })}</section>
+    <section class="card"><h3>Bebidas em restaurantes (por tipo)</h3>${barList(groupBy(visits, v => [...new Set((v.drinks || []).map(id => drinkById.get(id)).filter(Boolean).map(d => typeById(d.type).label))]), { showAvg: false })}</section>
+    ${byRest.some(x => x.r.wishlist) ? `<section class="card"><h3>📌 Quero conhecer</h3><div class="mini-list">${byRest.filter(x => x.r.wishlist).map(x => `<a href="#/restaurants/${esc(x.r.id)}">${esc(x.r.name)} <span class="muted">${esc([x.r.cuisine, restaurantPlace(x.r)].filter(Boolean).join(' · '))}</span></a>`).join('')}</div></section>` : ''}
+    <section class="card"><h3>Visitas por mês</h3>${monthlyActivity(visits.map(v => v.date))}</section>`;
+}
+
 // ================= Backup / Mais =================
 
 let installPrompt = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
 
 async function moreView() {
-  setHeader('Backup e app');
-  const [last, drinks, recipes, logs] = await Promise.all([db.getMeta('lastBackup', 0), db.getAll('drinks'), db.getAll('recipes'), db.getAll('logs')]);
+  setHeader('Mais');
+  const [last, drinks, recipes, logs, restaurants, visits] = await Promise.all([db.getMeta('lastBackup', 0), ...['drinks', 'recipes', 'logs', 'restaurants', 'visits'].map(db.getAll)]);
   const est = navigator.storage?.estimate ? await navigator.storage.estimate() : null;
   const persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : false;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const mb = n => `${(n / 1048576).toFixed(1).replace('.', ',')} MB`;
 
-  paint(`<section class="card"><h3>💾 Backup e transferência</h3>
+  paint(`<a class="menu-link" href="#/stats"><span>📊</span><div><b>Estatísticas</b><small>Bebidas, receitas e restaurantes</small></div>›</a>
+    <section class="card"><h3>💾 Backup e transferência</h3>
       <p>Tudo fica salvo <b>só neste aparelho</b>. Para levar seus registros a outro celular ou PC, exporte um arquivo e importe no outro aparelho. O arquivo pode ir por Drive, e-mail, WhatsApp, cabo etc.</p>
       <p class="muted">Último backup: ${last ? new Date(last).toLocaleString('pt-BR') : 'nunca'}</p>
       <label class="check"><input type="checkbox" id="incPhotos" checked> Incluir fotos (arquivo maior)</label>
@@ -1134,12 +1598,12 @@ async function moreView() {
     </section>
 
     <section class="card"><h3>🗄 Armazenamento</h3>
-      ${kpis([['bebidas', drinks.length], ['receitas', recipes.length], ['preparos', logs.length], ['espaço usado', est ? mb(est.usage || 0) : '—']])}
+      ${kpis([['bebidas', drinks.length], ['receitas', recipes.length], ['preparos', logs.length], ['restaurantes', restaurants.length], ['visitas', visits.length], ['espaço usado', est ? mb(est.usage || 0) : '—']])}
       <p>${persisted ? '✅ Armazenamento persistente ativado. O navegador não vai apagar seus dados para liberar espaço.' : '⚠️ O navegador pode apagar os dados se faltar espaço no aparelho.'}</p>
       ${persisted ? '' : '<div class="actions left"><button class="btn" id="persist">Pedir armazenamento persistente</button></div>'}
       <div class="actions left"><button class="btn ghost" id="clean">Limpar fotos não usadas</button></div>
     </section>
-    <p class="hint center">Adega & Receitas · v1.0 · funciona offline</p>`);
+    <p class="hint center">Adega & Receitas · v1.1 · funciona offline</p>`);
 
   $('#export').onclick = async () => {
     try {
@@ -1155,7 +1619,7 @@ async function moreView() {
     if (mode === 'replace' && !confirm('Substituir TODOS os dados deste aparelho pelos do arquivo?')) return;
     try {
       const c = await importBackup(file, mode);
-      alert(`Importação concluída:\n• ${c.drinks} bebidas\n• ${c.recipes} receitas\n• ${c.logs} preparos\n• ${c.photos} fotos`);
+      alert(`Importação concluída:\n• ${c.drinks} bebidas\n• ${c.recipes} receitas\n• ${c.logs} preparos\n• ${c.restaurants} restaurantes\n• ${c.visits} visitas\n• ${c.photos} fotos`);
       moreView();
     } catch (err) { alert(err.message); }
   };
@@ -1171,19 +1635,21 @@ async function moreView() {
 // ================= Roteador =================
 
 function notFound() {
-  setHeader('Não encontrado', '#/drinks');
+  setHeader('Não encontrado', '#/home');
   paint('<div class="empty">Este registro não existe mais.</div>');
 }
 
 async function router() {
-  const raw = location.hash.slice(1) || '/drinks';
+  const raw = location.hash.slice(1) || '/home';
   const [path, qs] = raw.split('?');
   const [a, b, c] = path.split('/').filter(Boolean);
   const q = new URLSearchParams(qs || '');
-  $$('#nav a').forEach(n => n.classList.toggle('on', n.dataset.section === (a === 'logs' ? 'recipes' : a)));
+  const section = { logs: 'recipes', visits: 'restaurants', stats: 'more' }[a] || a;
+  $$('#nav a').forEach(n => n.classList.toggle('on', n.dataset.section === section));
   window.scrollTo(0, 0);
   releaseWakeLock();
   try {
+    if (a === 'home') return await homeView();
     if (a === 'drinks') {
       if (!b) return await drinkList();
       if (b === 'new') return c ? await drinkForm(null, c) : drinkTypePicker();
@@ -1200,9 +1666,17 @@ async function router() {
       return await recipeDetail(b);
     }
     if (a === 'logs' && c === 'edit') return await logForm(b);
+    if (a === 'restaurants') {
+      if (!b) return await restaurantList();
+      if (b === 'new') return await restaurantForm(null);
+      if (c === 'edit') return await restaurantForm(b);
+      if (c === 'visit') return await visitForm(null, b);
+      return await restaurantDetail(b);
+    }
+    if (a === 'visits' && c === 'edit') return await visitForm(b);
     if (a === 'stats') return await statsView(b);
     if (a === 'more') return await moreView();
-    location.replace('#/drinks');
+    location.replace('#/home');
   } catch (e) {
     console.error(e);
     paint(`<div class="empty">Algo deu errado: ${esc(e.message)}</div>`);

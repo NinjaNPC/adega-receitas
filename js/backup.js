@@ -2,7 +2,7 @@
 // (inclui as fotos), para levar de um aparelho para outro.
 import * as db from './db.js';
 
-const DATA_STORES = ['drinks', 'recipes', 'logs', 'photos'];
+const DATA_STORES = ['drinks', 'recipes', 'logs', 'restaurants', 'visits', 'photos'];
 const APP_ID = 'adega-receitas';
 
 export async function buildBackup({ includePhotos = true } = {}) {

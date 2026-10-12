@@ -1,6 +1,6 @@
 // Service worker: guarda o app no aparelho para funcionar sem internet.
 // Ao publicar uma alteração, aumente a versão abaixo.
-const CACHE = 'adega-receitas-v1';
+const CACHE = 'adega-receitas-v2';
 const ASSETS = [
   './',
   './index.html',
